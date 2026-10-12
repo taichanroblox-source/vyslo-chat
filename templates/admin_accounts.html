@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA CHAT - ダッシュボード</title>
+<style>
+*{box-sizing:border-box}
+:root{color-scheme:dark}
+body{margin:0;background:#0b1020;color:#edf1ff;font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif}
+header{padding:16px 22px;background:#131b31;border-bottom:1px solid #293450;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.logo{font-size:22px;font-weight:bold;color:#a99aff}
+button{padding:11px 15px;border:0;border-radius:9px;background:#8b79f6;color:white;font-weight:bold;cursor:pointer}
+button:hover{filter:brightness(1.12)}
+.danger{background:#39445c}
+main{max-width:1100px;margin:auto;padding:24px}
+.welcome{color:#9aa7c5;line-height:1.7}
+h1{font-size:26px;margin:8px 0}
+h2{font-size:19px;margin-top:0}
+h3{font-size:16px;margin:0 0 10px}
+.panel{background:#131b31;border:1px solid #293450;border-radius:14px;padding:20px;margin:18px 0}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:20px}
+.stat{background:#19243c;border:1px solid #34415e;border-radius:13px;padding:18px}
+.stat-label{color:#9aa7c5;font-size:13px}
+.stat-number{font-size:28px;font-weight:bold;margin-top:8px}
+.stat-note{font-size:12px;color:#9aa7c5;margin-top:6px}
+.menu{display:flex;gap:9px;flex-wrap:wrap;margin:22px 0}
+.menu a{display:inline-block;text-decoration:none;color:#edf1ff;background:#19243c;border:1px solid #34415e;border-radius:9px;padding:11px 14px}
+.menu a:hover{border-color:#a99aff;background:#202d49}
+.applicant{background:#19243c;border:1px solid #34415e;border-radius:11px;padding:16px;margin:12px 0}
+.applicant p{color:#9aa7c5;font-size:13px;overflow-wrap:anywhere}
+.actions{display:flex;gap:9px;flex-wrap:wrap}
+.approve{background:#37c99a;color:#08251d}
+.reject{background:#c94c65}
+.muted{color:#9aa7c5;font-size:13px;line-height:1.7}
+.empty{color:#9aa7c5;padding:16px 0}
+#status{color:#a7f3d0;white-space:pre-line}
+#logoutStatus{font-size:13px;color:#9aa7c5}
+@media(max-width:650px){
+ main{padding:16px 12px}
+ header{padding:14px 12px}
+ .logo{font-size:19px}
+ h1{font-size:23px}
+ .panel{padding:15px}
+ .stats{grid-template-columns:1fr}
+ .stat{padding:15px}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">✦ NOVA CHAT</div>
+  <button class="danger" id="logout">ログアウト</button>
+</header>
+
+<main>
+  <p class="welcome">運営メニュー</p>
+  <h1>管理者ダッシュボード</h1>
+  <p class="welcome">NOVA CHATの運営状況とユーザー登録申請を管理できるよ。</p>
+
+  <nav class="menu" aria-label="管理メニュー">
+    <a href="#overview">ダッシュボード</a>
+    <a href="#requests">📨 登録申請</a>
+    <a href="#users">👥 ユーザー管理</a>
+    <a href="#rooms">💬 部屋一覧</a>
+    <a href="/chat">💬 チャットに戻る</a>
+  </nav>
+
+  <section id="overview" class="stats">
+    <article class="stat"><div class="stat-label">承認済みユーザー</div><div class="stat-number" id="userCount">—</div><div class="stat-note">登録済みアカウント</div></article>
+    <article class="stat"><div class="stat-label">利用停止中</div><div class="stat-number" id="suspendedCount">—</div><div class="stat-note">停止中のアカウント</div></article>
+    <article class="stat"><div class="stat-label">チャットルーム</div><div class="stat-number" id="roomCount">—</div><div class="stat-note">作成された部屋</div></article>
+    <article class="stat"><div class="stat-label">メッセージ総数</div><div class="stat-number" id="messageCount">—</div><div class="stat-note">すべての部屋の合計</div></article>
+    <article class="stat"><div class="stat-label">承認待ちの登録申請</div><div class="stat-number" id="pendingCount">—</div><div class="stat-note">最新の申請一覧から集計</div></article>
+    <article class="stat"><div class="stat-label">管理者機能</div><div class="stat-number">有効</div><div class="stat-note">管理者としてログイン中</div></article>
+  </section>
+
+  <p id="status" role="status" aria-live="polite"></p>
+
+  <section class="panel" id="requests">
+    <h2>📨 ユーザー登録申請</h2>
+    <p class="muted">申請を承認すると、そのユーザーがログインできるようになるよ。</p>
+    <div id="requestList" class="empty">申請を読み込み中…</div>
+    <button id="refreshRequests" class="danger" type="button">申請一覧を再読み込み</button>
+  </section>
+
+  <section class="panel" id="users">
+    <h2>👥 ユーザー管理</h2>
+    <p class="muted">利用停止にすると、次回ログインやログインが必要な操作ができなくなるよ。</p>
+    <div id="userList" class="empty">ユーザーを読み込み中…</div>
+    <button id="refreshUsers" class="danger" type="button">ユーザー一覧を再読み込み</button>
+  </section>
+
+  <section class="panel" id="rooms">
+    <h2>💬 チャット全体の管理</h2>
+    <div id="roomList" class="empty">部屋を読み込み中…</div>
+    <button id="refreshRooms" class="danger" type="button">部屋一覧を再読み込み</button>
+  </section>
+
+  <p id="logoutStatus"></p>
+</main>
+
+<script>
+const requestList = document.getElementById("requestList");
+const statusText = document.getElementById("status");
+const pendingCount = document.getElementById("pendingCount");
+
+async function loadRequests() {
+    requestList.textContent = "申請を読み込み中…";
+    pendingCount.textContent = "—";
+
+    try {
+        const response = await fetch("/api/admin/account-requests");
+        const data = await response.json();
+
+        if (!response.ok) {
+            requestList.textContent = data.error || "申請を読み込めなかったよ";
+            statusText.textContent = "申請一覧を取得できなかったよ。";
+            return;
+        }
+
+        if (!Array.isArray(data)) {
+            requestList.textContent = "サーバーから予想外のデータが返ってきたよ。";
+            return;
+        }
+
+        pendingCount.textContent = data.length;
+        requestList.replaceChildren();
+
+        if (data.length === 0) {
+            requestList.className = "empty";
+            requestList.textContent = "現在、承認待ちの申請はないよ。";
+            return;
+        }
+
+        requestList.className = "";
+
+        for (const applicant of data) {
+            const card = document.createElement("article");
+            card.className = "applicant";
+
+            const name = document.createElement("strong");
+            name.textContent = applicant.username;
+
+            const date = document.createElement("p");
+            date.textContent = "申請日時: " + applicant.created_at;
+
+            const actions = document.createElement("div");
+            actions.className = "actions";
+
+            const approve = document.createElement("button");
+            approve.className = "approve";
+            approve.textContent = "承認";
+            approve.type = "button";
+
+            const reject = document.createElement("button");
+            reject.className = "reject";
+            reject.textContent = "却下";
+            reject.type = "button";
+
+            approve.addEventListener("click", () =>
+                respond(applicant.username, "approve")
+            );
+            reject.addEventListener("click", () =>
+                respond(applicant.username, "reject")
+            );
+
+            actions.append(approve, reject);
+            card.append(name, date, actions);
+            requestList.append(card);
+        }
+    } catch (error) {
+        requestList.textContent = "サーバーに接続できないよ。";
+        statusText.textContent = "通信エラーが発生したよ。";
+    }
+}
+
+async function respond(username, action) {
+    const label = action === "approve" ? "承認" : "却下";
+    if (!confirm(username + " さんの申請を" + label + "する？")) return;
+
+    try {
+        const response = await fetch("/api/admin/account-requests/respond", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({username, action})
+        });
+
+        const data = await response.json();
+        statusText.textContent = data.message || data.error || "処理に失敗したよ";
+
+        if (response.ok) await loadRequests();
+    } catch (error) {
+        statusText.textContent = "サーバーに接続できないよ。";
+    }
+}
+
+
+async function loadOverview() {
+    try {
+        const response = await fetch("/api/admin/overview");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "統計を取得できなかったよ");
+        document.getElementById("userCount").textContent = data.user_count;
+        document.getElementById("suspendedCount").textContent = data.suspended_count;
+        document.getElementById("roomCount").textContent = data.room_count;
+        document.getElementById("messageCount").textContent = data.message_count;
+    } catch (error) {
+        statusText.textContent = error.message || "統計を読み込めなかったよ";
+    }
+}
+
+async function loadUsers() {
+    const list = document.getElementById("userList");
+    list.textContent = "ユーザーを読み込み中…";
+    try {
+        const response = await fetch("/api/admin/users");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "ユーザーを取得できなかったよ");
+        list.replaceChildren();
+        if (!data.length) {
+            list.className = "empty";
+            list.textContent = "登録ユーザーはいないよ。";
+            return;
+        }
+        list.className = "";
+        for (const user of data) {
+            const card = document.createElement("article");
+            card.className = "applicant";
+            const name = document.createElement("strong");
+            name.textContent = user.username + (user.suspended ? "（利用停止中）" : "");
+            const detail = document.createElement("p");
+            detail.textContent = user.approved ? "承認済みアカウント" : "未承認アカウント";
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            if (!user.is_web_admin) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = user.suspended ? "approve" : "reject";
+                button.textContent = user.suspended ? "利用再開" : "利用停止";
+                button.addEventListener("click", () => changeUserStatus(user.username, user.suspended ? "restore" : "suspend"));
+                actions.append(button);
+            } else {
+                const badge = document.createElement("span");
+                badge.className = "muted";
+                badge.textContent = "管理者アカウント";
+                actions.append(badge);
+            }
+            card.append(name, detail, actions);
+            list.append(card);
+        }
+    } catch (error) {
+        list.textContent = error.message || "ユーザー一覧を読み込めなかったよ";
+    }
+}
+
+async function changeUserStatus(username, action) {
+    const label = action === "suspend" ? "利用停止" : "利用再開";
+    if (!confirm(username + " さんを" + label + "する？")) return;
+    try {
+        const response = await fetch("/api/admin/users/status", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({username, action})
+        });
+        const data = await response.json();
+        statusText.textContent = data.message || data.error || "処理に失敗したよ";
+        if (response.ok) {
+            await loadUsers();
+            await loadOverview();
+        }
+    } catch (error) {
+        statusText.textContent = "通信エラーが発生したよ。";
+    }
+}
+
+async function loadRooms() {
+    const list = document.getElementById("roomList");
+    list.textContent = "部屋を読み込み中…";
+
+    try {
+        const response = await fetch("/api/admin/rooms");
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "部屋一覧を取得できなかったよ");
+        }
+
+        list.replaceChildren();
+
+        if (!data.length) {
+            list.className = "empty";
+            list.textContent = "まだ部屋が作成されていないよ。";
+            return;
+        }
+
+        list.className = "";
+
+        for (const room of data) {
+            const card = document.createElement("article");
+            card.className = "applicant";
+
+            const name = document.createElement("strong");
+            name.textContent = room.name;
+
+            const details = document.createElement("p");
+            details.textContent =
+                "部屋ID: " + room.id +
+                " / 作成者: " + room.created_by +
+                " / 参加人数: " + room.participant_count +
+                " / メッセージ: " + room.message_count;
+
+            const openButton = document.createElement("button");
+            openButton.textContent = "開く";
+            openButton.addEventListener("click", () => {
+                window.location.href = "/room/" + encodeURIComponent(room.id);
+            });
+
+            const deleteButton = document.createElement("button");
+            deleteButton.textContent = "削除";
+            deleteButton.addEventListener("click", async () => {
+                if (!confirm(
+                    "本当に「" + room.name +
+                    "」を削除する？\nメッセージや参加情報も削除されるよ。"
+                )) return;
+
+                try {
+                    const result = await fetch("/api/delete-room", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({room_id: room.id})
+                    });
+
+                    const resultData = await result.json();
+
+                    if (!result.ok) {
+                        throw new Error(resultData.error || "削除できなかったよ");
+                    }
+
+                    alert("部屋を削除したよ");
+                    await loadRooms();
+                    await loadOverview();
+                } catch (error) {
+                    alert(error.message || "削除に失敗したよ");
+                }
+            });
+
+            const actions = document.createElement("div");
+            actions.append(openButton, deleteButton);
+            card.append(name, details, actions);
+            list.append(card);
+        }
+    } catch (error) {
+        list.textContent = error.message || "部屋一覧を読み込めなかったよ";
+    }
+}
+
+document.getElementById("refreshUsers").addEventListener("click", loadUsers);
+document.getElementById("refreshRooms").addEventListener("click", loadRooms);
+
+document.getElementById("refreshRequests").addEventListener("click", loadRequests);
+
+document.getElementById("logout").addEventListener("click", async () => {
+    if (!confirm("ログアウトする？")) return;
+
+    try {
+        const response = await fetch("/api/logout", {method: "POST"});
+        if (!response.ok) {
+            document.getElementById("logoutStatus").textContent =
+                "ログアウトできなかったよ。もう一度試してね。";
+            return;
+        }
+        window.location.href = "/";
+    } catch (error) {
+        document.getElementById("logoutStatus").textContent =
+            "サーバーに接続できないよ。";
+    }
+});
+
+loadRequests();
+loadOverview();
+loadUsers();
+loadRooms();
+</script>
+</body>
+</html>

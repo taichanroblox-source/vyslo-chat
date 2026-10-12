@@ -47,9 +47,8 @@ form.addEventListener("submit", (event) => {
   }
 
   try {
-    localStorage.setItem(USERNAME_KEY, username);
-    statusMessage.textContent =
-      `ユーザー名「${username}」をこのブラウザに保存したよ。`;
+localStorage.setItem(USERNAME_KEY, username);
+window.location.href = "/chat";
   } catch {
     statusMessage.textContent =
       "保存できなかったよ。ブラウザの保存設定を確認してね。";

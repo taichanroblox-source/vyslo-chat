@@ -1,56 +1,168 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#171923">
-  <title>VYSLO CHAT</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NOVA CHAT | アカウント</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 20px;
+            color: #f4f4ff;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: radial-gradient(circle at top, #29245b, #101225 60%);
+        }
+        .panel {
+            width: 100%;
+            max-width: 420px;
+            padding: 30px;
+            border: 1px solid #42416d;
+            border-radius: 22px;
+            background: #191a32;
+            box-shadow: 0 20px 60px #0005;
+        }
+        .logo { font-size: 34px; font-weight: 800; letter-spacing: 2px; }
+        .logo span { color: #a99aff; }
+        .sub { color: #aaaecb; margin: 8px 0 24px; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 22px; }
+        button, input { font: inherit; }
+        .tab {
+            flex: 1;
+            padding: 11px;
+            border: 1px solid #42416d;
+            border-radius: 10px;
+            background: #242541;
+            color: #c9c8e7;
+            cursor: pointer;
+        }
+        .tab.active { background: #7161d9; color: white; }
+        label { display: block; margin: 15px 0 7px; color: #d7d7ed; }
+        input {
+            width: 100%;
+            padding: 13px;
+            border: 1px solid #454565;
+            border-radius: 10px;
+            background: #101225;
+            color: white;
+            outline: none;
+        }
+        input:focus { border-color: #a99aff; }
+        .submit {
+            width: 100%;
+            margin-top: 22px;
+            padding: 13px;
+            border: 0;
+            border-radius: 10px;
+            background: linear-gradient(100deg, #7767e8, #9b72ed);
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        #message { min-height: 24px; margin-top: 15px; color: #9cebd2; }
+        .hint { color: #a6a9c6; font-size: 12px; line-height: 1.6; }
+    </style>
 </head>
 <body>
-  <main class="page">
-    <section class="panel" aria-labelledby="page-title">
-      <div class="brand-mark" aria-hidden="true">V</div>
-      <p class="eyebrow">YOUR SPACE TO CHAT</p>
-      <h1 id="page-title">VYSLO <span>CHAT</span></h1>
-      <p class="intro">はじめにユーザー設定をしよう。</p>
+    <main class="panel">
+        <div class="logo">NOVA <span>CHAT</span></div>
+        <p class="sub">自分のアカウントでチャットに参加しよう。</p>
 
-      <form id="setup-form">
-        <label for="username">ユーザー名</label>
-        <input id="username" name="username" type="text"
-               maxlength="24" autocomplete="nickname"
-               placeholder="例：Codelian" required>
-        <p class="hint">このブラウザに保存して、次回も使えるようにするよ。</p>
-
-        <div class="admin-option">
-          <label class="checkbox-label" for="admin-mode">
-            <input id="admin-mode" name="admin-mode" type="checkbox">
-            <span>サービス全体の管理者としてログイン</span>
-          </label>
+        <div class="tabs">
+            <button class="tab active" id="loginTab" type="button">ログイン</button>
+            <button class="tab" id="registerTab" type="button">新規登録</button>
         </div>
 
-        <div id="admin-password-area" hidden>
-          <label for="admin-password">管理者パスワード</label>
-          <input id="admin-password" name="admin-password"
-                 type="password" autocomplete="current-password"
-                 placeholder="管理者用パスワード">
-          <p class="hint warning">
-            これは画面の試作だよ。管理者認証はまだ接続されていないため、
-            パスワードを入力しても送信・保存されないよ。
-          </p>
-        </div>
+        <form id="accountForm">
+            <label for="username">ユーザー名（3〜20文字）</label>
+            <input id="username" maxlength="20" minlength="3"
+                   autocomplete="username" required>
 
-        <button type="submit" class="primary-button">設定を保存して進む</button>
-        <p id="status" class="status" role="status" aria-live="polite"></p>
-      </form>
+            <label for="password">パスワード（6文字以上）</label>
+            <input id="password" type="password" minlength="6" maxlength="128"
+                   autocomplete="current-password" required>
 
-      <div class="next-step">
-        <span class="step-dot"></span>
-        次のステップ：部屋の作成・参加
-      </div>
-    </section>
-    <footer>VYSLO CHAT <span>•</span> 初期試作版</footer>
-  </main>
+            <div id="adminPasswordArea" hidden>
+                <label for="adminPassword">管理者専用パスワード</label>
+                <input id="adminPassword" type="password" maxlength="128"
+                       autocomplete="off">
+                <p class="hint">管理者アカウントでログインするときだけ入力してね。</p>
+            </div>
+
+            <button class="submit" id="submitButton" type="submit">ログイン</button>
+        </form>
+
+        <p id="message" role="status"></p>
+        <p class="hint">パスワードはほかの人に教えないでね。ほかのサービスと同じパスワードは使わず、テスト用のものを設定しよう。</p>
+    </main>
+
+    <script>
+        let mode = "login";
+
+        const loginTab = document.getElementById("loginTab");
+        const registerTab = document.getElementById("registerTab");
+        const form = document.getElementById("accountForm");
+        const password = document.getElementById("password");
+        const adminPassword = document.getElementById("adminPassword");
+        const adminPasswordArea = document.getElementById("adminPasswordArea");
+        const submitButton = document.getElementById("submitButton");
+        const message = document.getElementById("message");
+
+        function setMode(nextMode) {
+            mode = nextMode;
+            loginTab.classList.toggle("active", mode === "login");
+            registerTab.classList.toggle("active", mode === "register");
+            submitButton.textContent = mode === "login" ? "ログイン" : "アカウントを作成";
+            password.autocomplete = mode === "login" ? "current-password" : "new-password";
+            adminPasswordArea.hidden = mode !== "login";
+            adminPassword.value = "";
+            message.textContent = "";
+        }
+
+        loginTab.addEventListener("click", () => setMode("login"));
+        registerTab.addEventListener("click", () => setMode("register"));
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            message.textContent = "処理中…";
+            submitButton.disabled = true;
+
+            try {
+                const response = await fetch(
+                    mode === "login" ? "/api/login" : "/api/register",
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            username: document.getElementById("username").value,
+                            password: password.value,
+                            admin_password: adminPassword.value
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    message.textContent = data.error || "エラーが発生したよ";
+                    return;
+                }
+
+                message.textContent = data.message;
+                if (mode === "login" && data.is_web_admin === true) {
+                    window.location.href = "/admin/accounts#users";
+                } else {
+                    window.location.href = "/chat";
+                }
+            } catch (error) {
+                message.textContent = "サーバーに接続できないよ。起動状態を確認してね。";
+            } finally {
+                submitButton.disabled = false;
+            }
+        });
+    </script>
 </body>
 </html>

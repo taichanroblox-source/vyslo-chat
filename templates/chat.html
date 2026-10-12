@@ -1,0 +1,435 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA CHAT - 部屋一覧</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1020;color:#edf1ff;font-family:Arial,sans-serif}
+header{padding:18px 24px;background:#131b31;border-bottom:1px solid #293450;
+display:flex;justify-content:space-between;align-items:center}
+.logo{font-size:22px;font-weight:bold;color:#a99aff}
+main{max-width:900px;margin:auto;padding:24px}
+h1{font-size:25px}
+.panel{background:#131b31;border:1px solid #293450;border-radius:14px;
+padding:18px;margin:18px 0}
+input,textarea{display:block;width:100%;margin:10px 0;padding:12px;
+border-radius:9px;border:1px solid #394765;background:#0b1020;color:white}
+button{padding:11px 16px;border:0;border-radius:9px;
+background:#8b79f6;color:white;font-weight:bold;cursor:pointer}
+.room{display:block;padding:17px;margin-top:12px;background:#19243c;
+border:1px solid #34415e;border-radius:11px;color:#edf1ff;text-decoration:none}
+.room:hover{border-color:#a99aff;background:#202d49}
+.room-name{font-size:18px;font-weight:bold}
+.muted{color:#9aa7c5;font-size:13px;margin-top:6px}
+#notice{margin:12px 0;color:#a7f3d0}
+.notification{background:#263653;border:1px solid #8b79f6;padding:12px;margin:8px 0;border-radius:9px}
+.notification button{margin-left:10px;padding:6px 10px}
+.danger{background:#39445c}
+
+#appModal[hidden]{display:none!important}
+#appModal{position:fixed;inset:0;z-index:9999;display:flex;
+align-items:center;justify-content:center;padding:20px;
+background:rgba(3,8,20,.8);backdrop-filter:blur(5px)}
+#appModal .modal-card{width:min(100%,420px);padding:25px;
+border:1px solid #344564;border-radius:18px;background:#111c31;
+color:#edf1ff;box-shadow:0 24px 70px #0008}
+#appModal h2{margin:0 0 12px;font-size:21px}
+#appModalMessage{color:#b9c6dc;line-height:1.8;white-space:pre-line}
+#appModal .modal-actions{display:flex;justify-content:flex-end;
+gap:10px;flex-wrap:wrap;margin-top:24px}
+#appModal button{border:0;border-radius:10px;padding:11px 17px;
+color:white;background:#34445f;cursor:pointer}
+#appModal #appModalConfirm{background:#3678ed}
+#appModal #appModalConfirm.danger{background:#c43852}
+
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">✦ NOVA CHAT</div>
+  {% if is_web_admin %}
+  <button type="button" onclick="window.location.href='/admin/accounts#users'">管理者画面</button>
+  {% endif %}
+  <button class="danger" id="logout">ログアウト</button>
+</header>
+<main>
+  <h1>部屋一覧</h1>
+  <p class="muted" id="welcome">ログイン確認中...</p>
+  <div id="notice" role="status"></div>
+  <section id="notifications" aria-live="polite"></section>
+
+  <section class="panel">
+    <h2>参加している部屋</h2>
+    <div id="rooms">読み込み中...</div>
+  </section>
+
+  <section class="panel">
+    <h2>新しい部屋を作成</h2>
+    <form id="createForm">
+      <input id="roomName" maxlength="40" placeholder="部屋の名前" required>
+      <textarea id="description" maxlength="500" placeholder="部屋の説明（任意）"></textarea>
+      <button type="submit">部屋を作成</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>部屋に参加申請</h2>
+    <form id="joinForm">
+      <input id="roomId" placeholder="部屋ID" required>
+      <button type="submit">参加申請を送る</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>参加申請の管理</h2>
+    <div id="requests">読み込み中...</div>
+  </section>
+</main>
+
+<div id="appModal" hidden>
+  <section class="modal-card" role="dialog" aria-modal="true"
+           aria-labelledby="appModalTitle">
+    <h2 id="appModalTitle">確認</h2>
+    <div id="appModalMessage"></div>
+    <div class="modal-actions">
+      <button type="button" id="appModalCancel">キャンセル</button>
+      <button type="button" id="appModalConfirm">OK</button>
+    </div>
+  </section>
+</div>
+
+<script>
+
+const appModal = document.getElementById("appModal");
+const appModalTitle = document.getElementById("appModalTitle");
+const appModalMessage = document.getElementById("appModalMessage");
+const appModalCancel = document.getElementById("appModalCancel");
+const appModalConfirm = document.getElementById("appModalConfirm");
+
+function showDialog(title, message, confirmText, cancelText, danger) {
+  return new Promise((resolve) => {
+    appModalTitle.textContent = title;
+    appModalMessage.textContent = message;
+    appModalConfirm.textContent = confirmText || "OK";
+    appModalConfirm.classList.toggle("danger", !!danger);
+    appModalCancel.textContent = cancelText || "閉じる";
+    appModalCancel.hidden = !cancelText;
+    appModal.hidden = false;
+
+    function finish(result) {
+      appModal.hidden = true;
+      appModalConfirm.removeEventListener("click", yes);
+      appModalCancel.removeEventListener("click", no);
+      document.removeEventListener("keydown", keydown);
+      resolve(result);
+    }
+    function yes() { finish(true); }
+    function no() { finish(false); }
+    function keydown(event) {
+      if (event.key === "Escape") finish(false);
+    }
+
+    appModalConfirm.addEventListener("click", yes);
+    appModalCancel.addEventListener("click", no);
+    document.addEventListener("keydown", keydown);
+    (cancelText ? appModalCancel : appModalConfirm).focus();
+  });
+}
+
+function showConfirm(title, message, buttonText) {
+  return showDialog(title, message, buttonText || "実行する",
+                    "キャンセル", true);
+}
+
+function showNotice(message, title) {
+  return showDialog(title || "お知らせ", message, "OK", "", false);
+}
+
+
+const notice = document.getElementById("notice");
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {"Content-Type":"application/json", ...(options.headers || {})}
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "エラーが発生したよ");
+  return data;
+}
+
+
+async function loadNotifications() {
+  try {
+    const data = await api("/api/notifications");
+    const items = data.notifications || [];
+    const container = document.getElementById("notifications");
+
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = "notification";
+
+      const message = document.createElement("span");
+      message.textContent = "🔔 " + item.content;
+
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "閉じる";
+      close.addEventListener("click", () => row.remove());
+
+      row.append(message, close);
+      container.prepend(row);
+    }
+
+    if (items.length) {
+      await api("/api/notifications/read", {method: "POST"});
+    }
+  } catch (error) {
+    console.error("通知の読み込みに失敗:", error);
+  }
+}
+
+async function loadRooms() {
+  const container = document.getElementById("rooms");
+  try {
+    const data = await api("/api/rooms");
+    const rooms = data.rooms || [];
+    container.replaceChildren();
+
+    if (!rooms.length) {
+      container.textContent = "まだ参加している部屋はないよ。";
+      return;
+    }
+
+    for (const room of rooms) {
+      const isPending = room.status === "pending";
+
+      const card = document.createElement(isPending ? "div" : "a");
+      card.className = "room";
+      if (!isPending) {
+        card.href = "/room/" + encodeURIComponent(room.id);
+      } else {
+        card.style.opacity = "0.8";
+        card.style.cursor = "default";
+      }
+
+      const name = document.createElement("div");
+      name.className = "room-name";
+      name.textContent = room.name;
+
+      const description = document.createElement("div");
+      description.className = "muted";
+      description.textContent = room.description || "説明はありません";
+
+      const details = document.createElement("div");
+      details.className = "muted";
+
+      if (isPending) {
+        details.textContent = "部屋ID：" + room.id + " ・ 承認待ち";
+      } else {
+        details.textContent = "部屋ID：" + room.id + " ・ " +
+          (room.role === "admin" ? "管理者" : "参加者");
+      }
+
+      card.append(name, description, details);
+
+      if (!isPending) {
+        const leaveButton = document.createElement("button");
+        leaveButton.type = "button";
+        leaveButton.textContent = "部屋から脱退";
+        leaveButton.style.marginTop = "12px";
+
+        leaveButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!(await showConfirm(
+            "部屋から脱退する？",
+            "「" + room.name + "」から脱退するよ。\n再参加には、もう一度申請して管理者の承認が必要だよ。",
+            "脱退する"
+          ))) {
+            return;
+          }
+
+          leaveButton.disabled = true;
+
+          try {
+            await api("/api/leave-room", {
+              method: "POST",
+              body: JSON.stringify({ room_id: room.id })
+            });
+
+            await showNotice("部屋から脱退したよ");
+            await loadRooms();
+            await loadRequests();
+          } catch (error) {
+            await showNotice(error.message, "エラー");
+            leaveButton.disabled = false;
+          }
+        });
+
+        card.append(leaveButton);
+
+        if (room.role === "admin") {
+          const deleteButton = document.createElement("button");
+          deleteButton.type = "button";
+          deleteButton.textContent = "部屋を削除";
+          deleteButton.style.margin = "12px 0 0 8px";
+          deleteButton.style.background = "#b93852";
+
+          deleteButton.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (!(await showConfirm(
+              "部屋を削除する？",
+              "「" + room.name + "」を削除するよ。\n部屋のメッセージも削除され、元に戻せないよ。",
+              "削除する"
+            ))) {
+              return;
+            }
+
+            deleteButton.disabled = true;
+
+            try {
+              await api("/api/delete-room", {
+                method: "POST",
+                body: JSON.stringify({room_id: room.id})
+              });
+
+              await showNotice("部屋を削除したよ。参加者には通知が送られるよ。");
+              await loadRooms();
+              await loadRequests();
+            } catch (error) {
+              await showNotice(error.message, "エラー");
+              deleteButton.disabled = false;
+            }
+          });
+
+          card.append(deleteButton);
+        }
+
+      }
+
+      container.append(card);
+    }
+  } catch (error) {
+    container.textContent = error.message;
+  }
+}
+
+async function loadRequests() {
+  const container = document.getElementById("requests");
+  try {
+    const data = await api("/api/join-requests");
+    const requests = data.requests || [];
+    container.replaceChildren();
+
+    if (!requests.length) {
+      container.textContent = "未処理の参加申請はないよ。";
+      return;
+    }
+
+    for (const item of requests) {
+      const row = document.createElement("div");
+      row.className = "room";
+
+      const label = document.createElement("div");
+      label.textContent = item.room_name + "： " + item.applicant;
+
+      for (const action of ["approve", "reject"]) {
+        const button = document.createElement("button");
+        button.style.margin = "10px 8px 0 0";
+        button.textContent = action === "approve" ? "承認" : "拒否";
+        button.addEventListener("click", async () => {
+          try {
+            const result = await api("/api/respond-join-request", {
+              method:"POST",
+              body:JSON.stringify({
+                room_id:item.room_id,
+                applicant:item.applicant,
+                action
+              })
+            });
+            notice.textContent = result.message;
+            await loadRequests();
+            await loadRooms();
+          } catch (error) {
+            notice.textContent = error.message;
+          }
+        });
+        row.append(label, button);
+      }
+      container.append(row);
+    }
+  } catch (error) {
+    container.textContent = error.message;
+  }
+}
+
+document.getElementById("createForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    const data = await api("/api/create-room", {
+      method:"POST",
+      body:JSON.stringify({
+        name:document.getElementById("roomName").value,
+        description:document.getElementById("description").value
+      })
+    });
+    notice.textContent = "部屋を作成したよ！チャットへ移動するね。";
+    location.href = "/room/" + encodeURIComponent(data.room_id);
+  } catch (error) {
+    notice.textContent = error.message;
+  }
+});
+
+document.getElementById("joinForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    const data = await api("/api/join-room", {
+      method:"POST",
+      body:JSON.stringify({
+        room_id:document.getElementById("roomId").value
+      })
+    });
+    notice.textContent = data.message || "参加申請を送ったよ！";
+    document.getElementById("roomId").value = "";
+  } catch (error) {
+    notice.textContent = error.message;
+  }
+});
+
+document.getElementById("logout").addEventListener("click", async () => {
+  try {
+    await api("/api/logout", {method:"POST"});
+    location.href = "/";
+  } catch (error) {
+    notice.textContent = error.message;
+  }
+});
+
+async function start() {
+  try {
+    const me = await api("/api/me");
+    document.getElementById("welcome").textContent =
+      me.username + " としてログイン中";
+    await Promise.all([loadRooms(), loadRequests()]);
+  } catch (error) {
+    location.href = "/";
+  }
+}
+
+start();
+setInterval(loadRequests, 10000);
+loadNotifications();
+setInterval(loadNotifications, 5000);
+</script>
+
+
+
+</body>
+</html>
