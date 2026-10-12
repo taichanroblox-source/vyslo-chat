@@ -178,6 +178,35 @@ def init_db():
         """)
 
 
+
+        # 環境変数から管理者アカウントを作成
+        admin_username = os.environ.get("WEB_ADMIN_USERNAME", "").strip()
+        admin_password = os.environ.get("WEB_ADMIN_PASSWORD", "")
+
+        if admin_username and admin_password:
+            existing_admin = db.execute(
+                "SELECT 1 FROM users WHERE username = ?",
+                (admin_username,)
+            ).fetchone()
+
+            if not existing_admin:
+                db.execute(
+                    """
+                    INSERT INTO users
+                    (username, password_hash, approved, suspended)
+                    VALUES (?, ?, 1, 0)
+                    """,
+                    (
+                        admin_username,
+                        generate_password_hash(admin_password)
+                    )
+                )
+
+                db.execute(
+                    "DELETE FROM account_requests WHERE username = ?",
+                    (admin_username,)
+                )
+
 init_db()
 
 with connect_db() as db:
