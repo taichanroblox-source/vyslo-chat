@@ -53,7 +53,10 @@ color:white;background:#34445f;cursor:pointer}
   {% if is_web_admin %}
   <button type="button" onclick="window.location.href='/admin/accounts#users'">管理者画面</button>
   {% endif %}
-  <button class="danger" id="logout">ログアウト</button>
+  <div>
+    <button class="danger" id="logout">ログアウト</button>
+    <button type="button" class="danger" id="deleteAccount">アカウント削除</button>
+  </div>
 </header>
 <main>
   <h1>部屋一覧</h1>
@@ -401,6 +404,35 @@ document.getElementById("joinForm").addEventListener("submit", async event => {
   } catch (error) {
     notice.textContent = error.message;
   }
+});
+
+document.getElementById("deleteAccount").addEventListener("click", async () => {
+    const confirmed = confirm(
+        "本当にアカウントを削除する？\\nこの操作は元に戻せないよ。自分が作成した部屋も削除されるよ。"
+    );
+    if (!confirmed) return;
+
+    const password = prompt("本人確認のため、現在のパスワードを入力してね。");
+    if (password === null || password.length === 0) return;
+
+    try {
+        const response = await fetch("/api/account/delete", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({password})
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            alert(data.error || "アカウントを削除できなかったよ。");
+            return;
+        }
+
+        alert(data.message || "アカウントを削除したよ。");
+        window.location.href = "/";
+    } catch (error) {
+        alert("通信エラーが発生したよ。もう一度試してね。");
+    }
 });
 
 document.getElementById("logout").addEventListener("click", async () => {

@@ -50,6 +50,26 @@ def init_db():
                 ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0
             """)
 
+        # Web管理者権限をユーザーごとに保存する
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "is_web_admin" not in columns:
+            db.execute("""
+                ALTER TABLE users
+                ADD COLUMN is_web_admin INTEGER NOT NULL DEFAULT 0
+            """)
+
+        # 環境変数で指定された最初の管理者は管理者権限を維持する
+        admin_username = os.environ.get("WEB_ADMIN_USERNAME", "").strip()
+        if admin_username:
+            db.execute("""
+                UPDATE users
+                SET is_web_admin = 1
+                WHERE username = ?
+            """, (admin_username,))
+
         # 新規申請者は承認されるまで待機する
         db.execute("""
             CREATE TABLE IF NOT EXISTS account_requests (
@@ -193,8 +213,8 @@ def init_db():
                 db.execute(
                     """
                     INSERT INTO users
-                    (username, password_hash, approved, suspended)
-                    VALUES (?, ?, 1, 0)
+                    (username, password_hash, approved, suspended, is_web_admin)
+                    VALUES (?, ?, 1, 0, 1)
                     """,
                     (
                         admin_username,
@@ -206,6 +226,12 @@ def init_db():
                     "DELETE FROM account_requests WHERE username = ?",
                     (admin_username,)
                 )
+
+            # 既存の管理者アカウントにも権限を確実に付ける
+            db.execute("""
+                UPDATE users SET is_web_admin = 1
+                WHERE username = ?
+            """, (admin_username,))
 
 init_db()
 
@@ -269,12 +295,26 @@ def is_room_admin(db, room_id, username):
 
 
 def is_web_admin(username):
-    admin = os.environ.get("WEB_ADMIN_USERNAME", "").strip()
-    return (
-        bool(admin)
-        and username == admin
-        and session.get("web_admin") is True
-    )
+    if not username or session.get("username") != username:
+        return False
+
+    try:
+        with connect_db() as db:
+            user = db.execute("""
+                SELECT is_web_admin, approved, suspended
+                FROM users
+                WHERE username = ?
+            """, (username,)).fetchone()
+
+        return bool(
+            user
+            and user["is_web_admin"]
+            and user["approved"]
+            and not user["suspended"]
+            and session.get("web_admin") is True
+        )
+    except sqlite3.Error:
+        return False
 
 
 @app.route("/")
@@ -344,7 +384,7 @@ def login():
 
     with connect_db() as db:
         user = db.execute("""
-            SELECT password_hash, approved, suspended
+            SELECT password_hash, approved, suspended, is_web_admin
             FROM users
             WHERE username = ?
         """, (username,)).fetchone()
@@ -358,24 +398,24 @@ def login():
     if user["suspended"]:
         return jsonify({"error": "このアカウントは利用停止中だよ"}), 403
 
-    # 管理者アカウントでは、専用パスワードも必須
+    # 最初に設定した管理者は、専用パスワードも必要
     if admin_username and username == admin_username:
         if not configured_admin_password or not secrets.compare_digest(
             admin_password, configured_admin_password
         ):
             return jsonify({"error": "管理者パスワードが違うよ"}), 403
 
-        session.clear()
-        session["username"] = username
-        session["web_admin"] = True
+    session.clear()
+    session["username"] = username
+    session["web_admin"] = bool(user["is_web_admin"])
+
+    if user["is_web_admin"]:
         return jsonify({
             "message": "管理者としてログインしたよ！",
             "username": username,
             "is_web_admin": True
         })
 
-    session.clear()
-    session["username"] = username
     return jsonify({
         "message": "ログインしたよ！",
         "username": username,
@@ -403,7 +443,7 @@ def admin_users_api():
 
     with connect_db() as db:
         users = db.execute("""
-            SELECT username, approved, suspended
+            SELECT username, approved, suspended, is_web_admin
             FROM users
             ORDER BY username
         """).fetchall()
@@ -412,10 +452,82 @@ def admin_users_api():
     result = []
     for row in users:
         item = dict(row)
-        item["is_web_admin"] = item["username"] == admin_username
+        item["is_bootstrap_admin"] = item["username"] == admin_username
         result.append(item)
 
     return jsonify(result)
+
+
+@app.route("/api/admin/users/role", methods=["POST"])
+def admin_user_role_api():
+    error = require_login()
+    if error:
+        return error
+
+    if not is_web_admin(current_user()):
+        return jsonify({"error": "管理者だけが使えるよ"}), 403
+
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    action = str(data.get("action", "")).strip()
+
+    if not username or action not in ("grant", "revoke"):
+        return jsonify({"error": "指定内容を確認してね"}), 400
+
+    bootstrap_admin = os.environ.get("WEB_ADMIN_USERNAME", "").strip()
+
+    with connect_db() as db:
+        target = db.execute("""
+            SELECT username, approved, suspended, is_web_admin
+            FROM users
+            WHERE username = ?
+        """, (username,)).fetchone()
+
+        if not target:
+            return jsonify({"error": "ユーザーが見つからないよ"}), 404
+
+        if action == "grant":
+            if not target["approved"] or target["suspended"]:
+                return jsonify({
+                    "error": "承認済みで利用可能なユーザーにだけ権限を付けられるよ"
+                }), 400
+
+            db.execute("""
+                UPDATE users SET is_web_admin = 1
+                WHERE username = ?
+            """, (username,))
+
+        else:
+            if username == bootstrap_admin:
+                return jsonify({
+                    "error": "最初に設定した管理者の権限はここから解除できないよ"
+                }), 403
+
+            if not target["is_web_admin"]:
+                return jsonify({"error": "このユーザーは管理者ではないよ"}), 400
+
+            admin_count = db.execute("""
+                SELECT COUNT(*) FROM users
+                WHERE is_web_admin = 1 AND approved = 1 AND suspended = 0
+            """).fetchone()[0]
+
+            if admin_count <= 1:
+                return jsonify({
+                    "error": "最後の管理者の権限は解除できないよ"
+                }), 400
+
+            db.execute("""
+                UPDATE users SET is_web_admin = 0
+                WHERE username = ?
+            """, (username,))
+
+    return jsonify({
+        "message": (
+            username + " さんに管理者権限を付与したよ"
+            if action == "grant"
+            else username + " さんの管理者権限を解除したよ"
+        )
+    })
 
 
 @app.route("/api/admin/users/status", methods=["POST"])
@@ -568,6 +680,107 @@ def respond_account_request():
 
     message = "アカウントを承認したよ" if action == "approve" else "申請を却下したよ"
     return jsonify({"message": message})
+
+
+@app.route("/api/account/delete", methods=["POST"])
+def delete_own_account():
+    error = require_login()
+    if error:
+        return error
+
+    username = current_user()
+    data = request.get_json(silent=True) or {}
+    password = str(data.get("password", ""))
+
+    if not password:
+        return jsonify({"error": "パスワードを入力してね"}), 400
+
+    bootstrap_admin = os.environ.get("WEB_ADMIN_USERNAME", "").strip()
+
+    with connect_db() as db:
+        user = db.execute("""
+            SELECT password_hash, is_web_admin
+            FROM users
+            WHERE username = ?
+        """, (username,)).fetchone()
+
+        if not user or not check_password_hash(user["password_hash"], password):
+            return jsonify({"error": "パスワードが違うよ"}), 403
+
+        # 環境変数で指定された管理者は、先に管理者設定を移す必要がある
+        if username == bootstrap_admin:
+            return jsonify({
+                "error": "最初の管理者アカウントは、この画面から削除できないよ。先にRenderの管理者設定を別の管理者へ移す必要があるよ。"
+            }), 403
+
+        if user["is_web_admin"]:
+            remaining = db.execute("""
+                SELECT COUNT(*) FROM users
+                WHERE is_web_admin = 1
+                  AND approved = 1
+                  AND suspended = 0
+                  AND username != ?
+            """, (username,)).fetchone()[0]
+
+            if remaining == 0:
+                return jsonify({
+                    "error": "最後の管理者は削除できないよ。先に別のユーザーへ管理者権限を付与してね。"
+                }), 403
+
+        # 自分が作成した部屋と、その部屋に属するデータを削除する
+        owned_rooms = db.execute(
+            "SELECT id FROM rooms WHERE created_by = ?",
+            (username,)
+        ).fetchall()
+        room_ids = [row["id"] for row in owned_rooms]
+
+        tables = db.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+        """).fetchall()
+
+        for room in room_ids:
+            for table_row in tables:
+                table = table_row["name"]
+                columns = {
+                    row["name"]
+                    for row in db.execute(
+                        f'PRAGMA table_info("{table}")'
+                    ).fetchall()
+                }
+                if "room_id" in columns and table != "rooms":
+                    db.execute(
+                        f'DELETE FROM "{table}" WHERE room_id = ?',
+                        (room,)
+                    )
+
+        if room_ids:
+            db.executemany(
+                "DELETE FROM rooms WHERE id = ?",
+                [(room,) for room in room_ids]
+            )
+
+        # ユーザー名を持つ関連テーブルから本人のデータを削除する
+        for table_row in tables:
+            table = table_row["name"]
+            columns = {
+                row["name"]
+                for row in db.execute(
+                    f'PRAGMA table_info("{table}")'
+                ).fetchall()
+            }
+            if "username" in columns and table != "users":
+                db.execute(
+                    f'DELETE FROM "{table}" WHERE username = ?',
+                    (username,)
+                )
+
+        db.execute("DELETE FROM users WHERE username = ?", (username,))
+
+    session.clear()
+    return jsonify({
+        "message": "アカウントと関連データを削除したよ。"
+    })
 
 
 @app.route("/api/logout", methods=["POST"])

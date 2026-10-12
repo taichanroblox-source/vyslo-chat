@@ -233,24 +233,58 @@ async function loadUsers() {
             detail.textContent = user.approved ? "承認済みアカウント" : "未承認アカウント";
             const actions = document.createElement("div");
             actions.className = "actions";
-            if (!user.is_web_admin) {
-                const button = document.createElement("button");
-                button.type = "button";
-                button.className = user.suspended ? "approve" : "reject";
-                button.textContent = user.suspended ? "利用再開" : "利用停止";
-                button.addEventListener("click", () => changeUserStatus(user.username, user.suspended ? "restore" : "suspend"));
-                actions.append(button);
-            } else {
+            if (user.is_bootstrap_admin) {
                 const badge = document.createElement("span");
                 badge.className = "muted";
-                badge.textContent = "管理者アカウント";
+                badge.textContent = "最初の管理者（保護中）";
                 actions.append(badge);
+            } else {
+                const roleButton = document.createElement("button");
+                roleButton.type = "button";
+                roleButton.textContent = user.is_web_admin
+                    ? "管理者権限を解除"
+                    : "管理者権限を付与";
+                roleButton.addEventListener("click", () =>
+                    changeUserRole(user.username, user.is_web_admin ? "revoke" : "grant")
+                );
+                actions.append(roleButton);
+
+                const statusButton = document.createElement("button");
+                statusButton.type = "button";
+                statusButton.className = user.suspended ? "approve" : "reject";
+                statusButton.textContent = user.suspended ? "利用再開" : "利用停止";
+                statusButton.addEventListener("click", () =>
+                    changeUserStatus(user.username, user.suspended ? "restore" : "suspend")
+                );
+                actions.append(statusButton);
             }
             card.append(name, detail, actions);
             list.append(card);
         }
     } catch (error) {
         list.textContent = error.message || "ユーザー一覧を読み込めなかったよ";
+    }
+}
+
+async function changeUserRole(username, action) {
+    const label = action === "grant" ? "管理者権限を付与" : "管理者権限を解除";
+    if (!confirm(username + " さんの管理者権限を変更する？")) return;
+
+    try {
+        const response = await fetch("/api/admin/users/role", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({username, action})
+        });
+        const data = await response.json();
+        statusText.textContent = data.message || data.error || label + "に失敗したよ";
+
+        if (response.ok) {
+            await loadUsers();
+            await loadOverview();
+        }
+    } catch (error) {
+        statusText.textContent = "通信エラーが発生したよ。";
     }
 }
 
