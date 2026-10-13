@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA CHAT</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1020;color:#edf1ff;font-family:Arial,sans-serif}
+header{min-height:68px;padding:12px 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:#131b31;border-bottom:1px solid #293450}
+.logo{font-size:21px;font-weight:bold;color:#a99aff}
+a{color:#bcb0ff;text-decoration:none}
+main{max-width:1100px;margin:auto;padding:24px}
+.room-title{font-size:25px;font-weight:bold;margin-bottom:6px}
+.muted{color:#9aa7c5;font-size:13px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:16px}
+.panel{background:#111a2e;border:1px solid #293450;border-radius:14px;padding:14px;margin-top:16px}
+#messages{height:calc(100vh - 300px);min-height:250px;overflow-y:auto;background:#111a2e;border:1px solid #293450;border-radius:14px;padding:18px;margin-top:16px}
+.message{padding:12px 4px;border-bottom:1px solid #293450;overflow-wrap:anywhere}
+.message strong{color:#a99aff}
+.time{color:#8995b1;font-size:12px;margin-left:10px}
+.message-actions,.reaction-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+button{padding:9px 12px;border:0;border-radius:9px;background:#8b79f6;color:white;font-weight:bold;cursor:pointer}
+button.secondary{background:#293450;color:#edf1ff}
+button.danger{background:#9d4059}
+button:disabled{opacity:.5}
+form{display:flex;gap:10px;margin-top:12px}
+input{min-width:0;flex:1;padding:13px;border:1px solid #394765;border-radius:10px;background:#151f36;color:white;font-size:15px}
+#notice{color:#ffb6b6;margin-top:10px;white-space:pre-wrap}
+#members,#hands{padding-left:18px}
+.member-admin{color:#ffd78a}
+.command-help{font-size:13px;color:#aab6d1;line-height:1.7}
+#commandPanel{display:none}
+.deleted-item{padding:10px 0;border-bottom:1px solid #293450;overflow-wrap:anywhere}
+summary{cursor:pointer;color:#bcb0ff;font-weight:bold}
+@media(max-width:760px){main{padding:12px}.layout{grid-template-columns:1fr}#messages{height:50vh;padding:10px}header{padding:12px 14px}form{gap:6px}button{padding:9px}}
+
+/* 浮遊絵文字 */
+.composer-wrap{display:flex;align-items:flex-end;gap:8px;margin-top:12px}
+.composer-wrap #sendForm{flex:1;min-width:0;margin-top:0}
+#emojiDock{position:relative;flex-shrink:0}
+#emojiToggle{height:44px;min-width:46px;font-size:20px;padding:8px}
+#emojiPanel{position:absolute;bottom:52px;left:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:8px;background:#131b31;border:1px solid #394765;border-radius:12px;box-shadow:0 8px 24px #0008}
+#emojiPanel[hidden]{display:none}
+#emojiPanel button{font-size:21px;min-width:46px;padding:8px;background:#293450}
+#emojiPanel button:disabled{opacity:.35;cursor:not-allowed}
+#emojiStatus{font-size:11px;color:#aab6d1;text-align:center;max-width:64px}
+#floatingEmojiLayer{position:fixed;left:16px;right:260px;bottom:70px;height:55vh;overflow:hidden;pointer-events:none;z-index:20}
+.floating-emoji{position:absolute;bottom:-55px;display:flex;flex-direction:column;align-items:center;gap:3px;white-space:nowrap;animation:emojiFloat 4s ease-out forwards;text-shadow:0 2px 8px #000}
+.floating-emoji .emoji-face{font-size:38px;filter:drop-shadow(0 3px 8px #0006)}
+.floating-emoji .emoji-name{font-size:12px;color:#fff;background:#131b31dd;border-radius:8px;padding:3px 7px}
+@keyframes emojiFloat{0%{transform:translateY(0) scale(.75);opacity:0}12%{opacity:1;transform:translateY(-8vh) scale(1)}75%{opacity:1}100%{transform:translateY(-55vh) scale(1.15);opacity:0}}
+@media(max-width:760px){ #floatingEmojiLayer{left:8px;right:8px;bottom:65px;height:55vh}.composer-wrap{gap:6px}.composer-wrap #sendForm{gap:6px}#emojiToggle{min-width:42px;padding:7px}}
+
+</style>
+</head>
+<body>
+<header><div class="logo">✦ NOVA CHAT</div><a href="/chat">← 部屋一覧へ</a></header>
+<main>
+  <div class="room-title">{{ room_name }}</div>
+  <div class="muted">部屋ID：{{ room_id }}</div>
+  <div class="layout">
+    <section>
+      <div id="messages" aria-live="polite"></div>
+      <div id="floatingEmojiLayer" aria-hidden="true"></div>
+      <div class="composer-wrap">
+      <form id="sendForm">
+        <input id="content" maxlength="2000" placeholder="メッセージを入力..." autocomplete="off" required>
+        <button id="sendButton" type="submit">送信</button>
+      </form>
+      <div id="emojiDock">
+        <button id="emojiToggle" class="secondary" type="button" aria-expanded="false" aria-controls="emojiPanel" title="絵文字パネル">😀</button>
+        <div id="emojiPanel" hidden></div>
+        <div id="emojiStatus">絵文字</div>
+      </div>
+      </div>
+      <div id="notice" role="status"></div>
+      <details class="panel" id="deletedPanel" style="display:none">
+        <summary>削除されたメッセージの履歴</summary>
+        <div id="deletedMessages" class="muted" style="margin-top:12px"></div>
+      </details>
+      <section class="panel" id="commandPanel">
+        <strong>管理者コマンド</strong>
+        <div class="command-help">CLEAR — 部屋のメッセージを整理（履歴には残る）<br>BAN ユーザー名 理由 — ユーザーを部屋からBAN</div>
+        <form id="commandForm">
+          <input id="commandInput" placeholder="例：BAN user1 ルール違反" autocomplete="off">
+          <button type="submit">実行</button>
+        </form>
+      </section>
+    </section>
+    <aside>
+      <section class="panel">
+        <strong>参加者</strong>
+        <ul id="members"><li class="muted">読み込み中…</li></ul>
+      </section>
+      <section class="panel">
+        <strong>挙手</strong>
+        <button id="handButton" class="secondary" type="button" style="width:100%;margin-top:10px">✋ 挙手する</button>
+        <ul id="hands"></ul>
+      </section>
+    </aside>
+  </div>
+</main>
+<script>
+const roomId = {{ room_id | tojson }};
+const box = document.getElementById("messages");
+const form = document.getElementById("sendForm");
+const input = document.getElementById("content");
+const notice = document.getElementById("notice");
+const emojis = ["👍","❤️","😂","🎉","😮","👏"];
+let me = "";
+let roomAdmin = false;
+let webAdmin = false;
+let lastSignature = "";
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {"Content-Type":"application/json", ...(options.headers || {})}
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "エラーが発生したよ");
+  return data;
+}
+function showError(error){ notice.textContent = error.message || String(error); }
+
+async function loadInfo(){
+  const data = await api("/api/room-info?room_id=" + encodeURIComponent(roomId));
+  me = data.username;
+  roomAdmin = !!data.is_room_admin;
+  webAdmin = !!data.is_web_admin;
+  document.getElementById("commandPanel").style.display = roomAdmin ? "block" : "none";
+  const history = document.getElementById("deletedPanel");
+  history.style.display = (roomAdmin || webAdmin) ? "block" : "none";
+  if (roomAdmin || webAdmin) await loadDeleted();
+}
+
+async function loadMessages(){
+  try {
+    const data = await api("/api/messages?room_id=" + encodeURIComponent(roomId));
+    const messages = data.messages || [];
+    const signature = JSON.stringify(messages);
+    if (signature === lastSignature) return;
+    const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    lastSignature = signature;
+    box.replaceChildren();
+
+    for (const message of messages) {
+      const row = document.createElement("div");
+      row.className = "message";
+      const heading = document.createElement("div");
+      const author = document.createElement("strong");
+      author.textContent = message.username;
+      const time = document.createElement("span");
+      time.className = "time";
+      time.textContent = message.created_at || "";
+      heading.append(author,time);
+      const content = document.createElement("div");
+      content.textContent = message.content;
+      row.append(heading,content);
+
+      const reactions = document.createElement("div");
+      reactions.className = "reaction-row";
+      for (const emoji of emojis) {
+        const found = (message.reactions || []).find(r => r.emoji === emoji);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary";
+        button.textContent = emoji + (found ? " " + found.count : "");
+        button.addEventListener("click", async () => {
+          try {
+            await api("/api/react", {method:"POST",body:JSON.stringify({
+              room_id:roomId,message_id:message.id,emoji
+            })});
+            lastSignature = "";
+            await loadMessages();
+          } catch(e){showError(e);}
+        });
+        reactions.append(button);
+      }
+      row.append(reactions);
+
+      if (message.username === me || roomAdmin || webAdmin) {
+        const actions = document.createElement("div");
+        actions.className = "message-actions";
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "danger";
+        del.textContent = "削除";
+        del.addEventListener("click", async () => {
+          try {
+            await api("/api/delete-message", {method:"POST",body:JSON.stringify({
+              room_id:roomId,message_id:message.id
+            })});
+            lastSignature = "";
+            await loadMessages();
+            if (roomAdmin || webAdmin) await loadDeleted();
+          } catch(e){showError(e);}
+        });
+        actions.append(del);
+        row.append(actions);
+      }
+      box.append(row);
+    }
+    if (wasNearBottom) box.scrollTop = box.scrollHeight;
+  } catch(error){showError(error);}
+}
+
+async function loadMembers(){
+  try{
+    const data = await api("/api/members?room_id=" + encodeURIComponent(roomId));
+    const list = document.getElementById("members");
+    list.replaceChildren();
+    for(const member of (data.members || [])){
+      const li = document.createElement("li");
+      li.textContent = member.username + (member.role === "admin" ? " ★ 管理者" : "");
+      if(member.role === "admin") li.className = "member-admin";
+      list.append(li);
+    }
+  }catch(e){showError(e);}
+}
+
+async function loadHands(){
+  try{
+    const data = await api("/api/hand?room_id=" + encodeURIComponent(roomId));
+    const list = document.getElementById("hands");
+    list.replaceChildren();
+    for(const hand of (data.hands || [])){
+      const li = document.createElement("li");
+      li.textContent = hand.username;
+      list.append(li);
+    }
+  }catch(e){showError(e);}
+}
+
+async function loadDeleted(){
+  try{
+    const data = await api("/api/deleted-messages?room_id=" + encodeURIComponent(roomId));
+    const list = document.getElementById("deletedMessages");
+    list.replaceChildren();
+    if(!(data.messages || []).length){
+      list.textContent = "履歴はまだないよ";
+      return;
+    }
+    for(const message of data.messages){
+      const item = document.createElement("div");
+      item.className = "deleted-item";
+      const title = document.createElement("strong");
+      title.textContent = message.username + "：";
+      const content = document.createElement("span");
+      content.textContent = message.content;
+      const meta = document.createElement("div");
+      meta.className = "muted";
+      meta.textContent = "削除者：" + message.deleted_by + " / 削除日時：" + message.deleted_at;
+      item.append(title,content,meta);
+      list.append(item);
+    }
+  }catch(e){showError(e);}
+}
+
+
+// 浮遊絵文字パネル
+const floatingLayer = document.getElementById("floatingEmojiLayer");
+const emojiPanel = document.getElementById("emojiPanel");
+const emojiToggle = document.getElementById("emojiToggle");
+const emojiStatus = document.getElementById("emojiStatus");
+const floatingEmojiChoices = ["👍","❤️","😂","🎉","😮","👏","🔥","✨","💯","🥳"];
+const seenFloatingEmojiIds = new Set();
+let myFloatingEmojiActive = false;
+
+emojiToggle.addEventListener("click", () => {
+  emojiPanel.hidden = !emojiPanel.hidden;
+  emojiToggle.setAttribute("aria-expanded", String(!emojiPanel.hidden));
+});
+
+for (const emoji of floatingEmojiChoices) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = emoji;
+  button.title = emoji + " を浮かべる";
+  button.addEventListener("click", async () => {
+    if (myFloatingEmojiActive) return;
+    button.disabled = true;
+    try {
+      await api("/api/floating-emojis", {
+        method: "POST",
+        body: JSON.stringify({room_id: roomId, emoji})
+      });
+      emojiPanel.hidden = true;
+      emojiToggle.setAttribute("aria-expanded", "false");
+      notice.textContent = "";
+      await pollFloatingEmojis();
+    } catch (e) {
+      showError(e);
+    } finally {
+      await pollFloatingEmojis();
+    }
+  });
+  emojiPanel.append(button);
+}
+
+async function pollFloatingEmojis() {
+  try {
+    const rows = await api(
+      "/api/floating-emojis?room_id=" + encodeURIComponent(roomId)
+    );
+    const activeRows = Array.isArray(rows) ? rows : [];
+    myFloatingEmojiActive = activeRows.some(item => item.username === me);
+
+    emojiStatus.textContent = myFloatingEmojiActive ? "表示中…" : "絵文字";
+    emojiToggle.disabled = myFloatingEmojiActive;
+    for (const button of emojiPanel.querySelectorAll("button")) {
+      button.disabled = myFloatingEmojiActive;
+    }
+
+    for (const item of activeRows) {
+      if (seenFloatingEmojiIds.has(item.id)) continue;
+      seenFloatingEmojiIds.add(item.id);
+
+      const float = document.createElement("div");
+      float.className = "floating-emoji";
+      float.style.left = (5 + Math.random() * 85) + "%";
+
+      const face = document.createElement("span");
+      face.className = "emoji-face";
+      face.textContent = item.emoji;
+
+      const name = document.createElement("span");
+      name.className = "emoji-name";
+      name.textContent = item.username;
+
+      float.append(face, name);
+      floatingLayer.append(float);
+      float.addEventListener("animationend", () => float.remove(), {once:true});
+      setTimeout(() => float.remove(), 4500);
+    }
+
+    // ID記録が大きくなりすぎないようにする
+    if (seenFloatingEmojiIds.size > 500) seenFloatingEmojiIds.clear();
+  } catch (e) {
+    // 一時的な通信エラーでは文章チャットを止めない
+  }
+}
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const content = input.value.trim();
+  if (!content) return;
+  document.getElementById("sendButton").disabled = true;
+  try {
+    await api("/api/messages", {method:"POST",body:JSON.stringify({room_id:roomId,content})});
+    input.value = "";
+    notice.textContent = "";
+    lastSignature = "";
+    await loadMessages();
+  } catch(error){showError(error);}
+  finally {document.getElementById("sendButton").disabled = false;input.focus();}
+});
+
+document.getElementById("handButton").addEventListener("click", async () => {
+  try{
+    const result = await api("/api/hand",{method:"POST",body:JSON.stringify({room_id:roomId})});
+    document.getElementById("handButton").textContent = result.raised ? "✋ 挙手を取り消す" : "✋ 挙手する";
+    await loadHands();
+  }catch(e){showError(e);}
+});
+
+document.getElementById("commandForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const command = document.getElementById("commandInput").value.trim();
+  if(!command) return;
+  if(!confirm("このコマンドを実行する？\n" + command)) return;
+  try{
+    const result = await api("/api/room-command",{method:"POST",body:JSON.stringify({room_id:roomId,command})});
+    notice.textContent = result.message || "実行したよ";
+    document.getElementById("commandInput").value = "";
+    lastSignature = "";
+    await loadMessages();
+    await loadMembers();
+    await loadDeleted();
+  }catch(e){showError(e);}
+});
+
+(async()=>{
+  try{await loadInfo();await loadMessages();await loadMembers();await loadHands();await pollFloatingEmojis();}
+  catch(e){showError(e);}
+})();
+setInterval(()=>{loadMessages();loadMembers();loadHands();},3000);
+setInterval(pollFloatingEmojis, 500);
+</script>
+</body>
+</html>
