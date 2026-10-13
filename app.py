@@ -50,6 +50,24 @@ def init_db():
                 ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0
             """)
 
+        # 利用停止の期限と永久停止を管理する
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(users)").fetchall()
+        }
+
+        if "suspended_until" not in columns:
+            db.execute("""
+                ALTER TABLE users
+                ADD COLUMN suspended_until TEXT
+            """)
+
+        if "suspension_permanent" not in columns:
+            db.execute("""
+                ALTER TABLE users
+                ADD COLUMN suspension_permanent INTEGER NOT NULL DEFAULT 0
+            """)
+
         # Web管理者権限をユーザーごとに保存する
         columns = {
             row["name"]
@@ -242,14 +260,123 @@ with connect_db() as db:
             username TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            is_read INTEGER NOT NULL DEFAULT 0
+            is_read INTEGER NOT NULL DEFAULT 0,
+            type TEXT NOT NULL DEFAULT 'notice',
+            sender TEXT,
+            read_at TEXT
         )
     """)
 
+    # 既存データベースにも不足している列だけ追加する
+    columns = {
+        row["name"]
+        for row in db.execute(
+            "PRAGMA table_info(user_notifications)"
+        ).fetchall()
+    }
 
+    if "type" not in columns:
+        db.execute("""
+            ALTER TABLE user_notifications
+            ADD COLUMN type TEXT NOT NULL DEFAULT 'notice'
+        """)
+
+    if "sender" not in columns:
+        db.execute("""
+            ALTER TABLE user_notifications
+            ADD COLUMN sender TEXT
+        """)
+
+    if "read_at" not in columns:
+        db.execute("""
+            ALTER TABLE user_notifications
+            ADD COLUMN read_at TEXT
+        """)
+
+
+def cleanup_notifications(db):
+    """通知の種類に応じて期限切れ通知を削除する。"""
+    # 通常の通知：既読から24時間後
+    db.execute("""
+        DELETE FROM user_notifications
+        WHERE is_read = 1
+          AND type NOT IN ('admin_notice', 'admin_important', 'admin_warning')
+          AND read_at IS NOT NULL
+          AND datetime(read_at) <= datetime('now', '-24 hours')
+    """)
+
+    # 管理者からの通常メッセージ：既読から7日後
+    db.execute("""
+        DELETE FROM user_notifications
+        WHERE is_read = 1
+          AND type = 'admin_notice'
+          AND read_at IS NOT NULL
+          AND datetime(read_at) <= datetime('now', '-7 days')
+    """)
+
+    # 管理者からの重要メッセージ：既読から14日後
+    db.execute("""
+        DELETE FROM user_notifications
+        WHERE is_read = 1
+          AND type = 'admin_important'
+          AND read_at IS NOT NULL
+          AND datetime(read_at) <= datetime('now', '-14 days')
+    """)
+
+    # 管理者からの警告：既読から14日後
+    db.execute("""
+        DELETE FROM user_notifications
+        WHERE is_read = 1
+          AND type = 'admin_warning'
+          AND read_at IS NOT NULL
+          AND datetime(read_at) <= datetime('now', '-14 days')
+    """)
+
+    # 未読通知：作成から14日後
+    db.execute("""
+        DELETE FROM user_notifications
+        WHERE is_read = 0
+          AND datetime(created_at) <= datetime('now', '-14 days')
+    """)
 
 def current_user():
     return session.get("username")
+
+
+def refresh_suspension(db, username):
+    """期限切れの一時停止だけを解除して、最新のユーザー情報を返す。"""
+    user = db.execute(
+        "SELECT * FROM users WHERE username = ?",
+        (username,)
+    ).fetchone()
+
+    if not user:
+        return None
+
+    if (
+        user["suspended"]
+        and not user["suspension_permanent"]
+        and user["suspended_until"]
+    ):
+        expired = db.execute("""
+            SELECT datetime(?) <= datetime('now')
+        """, (user["suspended_until"],)).fetchone()[0]
+
+        if expired:
+            db.execute("""
+                UPDATE users
+                SET suspended = 0,
+                    suspended_until = NULL,
+                    suspension_permanent = 0
+                WHERE username = ?
+            """, (username,))
+
+            user = db.execute(
+                "SELECT * FROM users WHERE username = ?",
+                (username,)
+            ).fetchone()
+
+    return user
 
 
 def require_login():
@@ -259,10 +386,7 @@ def require_login():
         return jsonify({"error": "ログインしてね"}), 401
 
     with connect_db() as db:
-        user = db.execute(
-            "SELECT approved, suspended FROM users WHERE username = ?",
-            (username,)
-        ).fetchone()
+        user = refresh_suspension(db, username)
 
     if not user or not user["approved"]:
         session.clear()
@@ -383,11 +507,7 @@ def login():
     configured_admin_password = os.environ.get("WEB_ADMIN_PASSWORD", "")
 
     with connect_db() as db:
-        user = db.execute("""
-            SELECT password_hash, approved, suspended, is_web_admin
-            FROM users
-            WHERE username = ?
-        """, (username,)).fetchone()
+        user = refresh_suspension(db, username)
 
     if not user or not check_password_hash(user["password_hash"], password):
         return jsonify({"error": "ユーザー名かパスワードが違うよ"}), 403
@@ -398,9 +518,13 @@ def login():
     if user["suspended"]:
         return jsonify({"error": "このアカウントは利用停止中だよ"}), 403
 
-    # 最初に設定した管理者は、専用パスワードも必要
-    if admin_username and username == admin_username:
-        if not configured_admin_password or not secrets.compare_digest(
+    # 管理者権限を持つユーザーは、専用パスワードも必要
+    if user["is_web_admin"]:
+        if not configured_admin_password:
+            return jsonify({
+                "error": "管理者専用パスワードが設定されていないよ"
+            }), 500
+        if not secrets.compare_digest(
             admin_password, configured_admin_password
         ):
             return jsonify({"error": "管理者パスワードが違うよ"}), 403
@@ -443,7 +567,7 @@ def admin_users_api():
 
     with connect_db() as db:
         users = db.execute("""
-            SELECT username, approved, suspended, is_web_admin
+            SELECT username, approved, suspended, is_web_admin, suspended_until, suspension_permanent
             FROM users
             ORDER BY username
         """).fetchall()
@@ -535,12 +659,14 @@ def admin_user_status_api():
     error = require_login()
     if error:
         return error
+
     if not is_web_admin(current_user()):
         return jsonify({"error": "管理者だけが使えるよ"}), 403
 
     data = request.get_json(silent=True) or {}
     username = str(data.get("username", "")).strip()
     action = str(data.get("action", "")).strip()
+    duration = data.get("duration", "permanent")
 
     if not username or action not in ("suspend", "restore"):
         return jsonify({"error": "指定内容を確認してね"}), 400
@@ -548,6 +674,16 @@ def admin_user_status_api():
     admin_username = os.environ.get("WEB_ADMIN_USERNAME", "").strip()
     if username == admin_username:
         return jsonify({"error": "管理者アカウントは変更できないよ"}), 403
+
+    if action == "suspend":
+        if duration != "permanent":
+            try:
+                days = int(duration)
+            except (TypeError, ValueError):
+                return jsonify({"error": "停止日数は1〜30日で指定してね"}), 400
+
+            if not 1 <= days <= 30:
+                return jsonify({"error": "停止日数は1〜30日で指定してね"}), 400
 
     with connect_db() as db:
         user = db.execute(
@@ -558,14 +694,104 @@ def admin_user_status_api():
         if not user:
             return jsonify({"error": "ユーザーが見つからないよ"}), 404
 
-        suspended = 1 if action == "suspend" else 0
-        db.execute(
-            "UPDATE users SET suspended = ? WHERE username = ?",
-            (suspended, username)
-        )
+        if action == "restore":
+            db.execute("""
+                UPDATE users
+                SET suspended = 0,
+                    suspended_until = NULL,
+                    suspension_permanent = 0
+                WHERE username = ?
+            """, (username,))
+            message = username + " さんの利用停止を解除したよ"
 
-    message = "利用停止にしたよ" if suspended else "利用停止を解除したよ"
-    return jsonify({"message": username + " さんを" + message})
+        elif duration == "permanent":
+            db.execute("""
+                UPDATE users
+                SET suspended = 1,
+                    suspended_until = NULL,
+                    suspension_permanent = 1
+                WHERE username = ?
+            """, (username,))
+            message = username + " さんを永久停止にしたよ"
+
+        else:
+            db.execute("""
+                UPDATE users
+                SET suspended = 1,
+                    suspended_until = datetime('now', '+' || ? || ' days'),
+                    suspension_permanent = 0
+                WHERE username = ?
+            """, (days, username))
+            message = f"{username} さんを{days}日間の利用停止にしたよ"
+
+    return jsonify({"message": message})
+
+@app.route("/api/admin/notifications/send", methods=["POST"])
+def admin_send_notification_api():
+    error = require_login()
+    if error:
+        return error
+
+    sender = current_user()
+    if not is_web_admin(sender):
+        return jsonify({"error": "管理者だけが使えるよ"}), 403
+
+    data = request.get_json(silent=True) or {}
+    recipient = str(data.get("recipient", "all")).strip()
+    kind = str(data.get("type", "notice")).strip()
+    content = str(data.get("content", "")).strip()
+
+    if not content or len(content) > 2000:
+        return jsonify({"error": "メッセージは1〜2000文字で入力してね"}), 400
+
+    type_map = {
+        "notice": "admin_notice",
+        "important": "admin_important",
+        "warning": "admin_warning",
+    }
+    if kind not in type_map:
+        return jsonify({"error": "メッセージの種類を選び直してね"}), 400
+
+    notification_type = type_map[kind]
+
+    with connect_db() as db:
+        if recipient == "all":
+            users = db.execute("""
+                SELECT username FROM users
+                WHERE approved = 1 AND username != ?
+            """, (sender,)).fetchall()
+        else:
+            user = db.execute("""
+                SELECT username FROM users
+                WHERE username = ? AND approved = 1
+            """, (recipient,)).fetchone()
+
+            if not user:
+                return jsonify({"error": "送信先のユーザーが見つからないよ"}), 404
+            users = [user]
+
+        prefix = {
+            "admin_notice": "【管理者からのお知らせ】",
+            "admin_important": "【管理者からの重要なお知らせ】",
+            "admin_warning": "【管理者からの警告】",
+        }[notification_type]
+
+        for user in users:
+            db.execute("""
+                INSERT INTO user_notifications
+                    (username, content, type, sender)
+                VALUES (?, ?, ?, ?)
+            """, (
+                user["username"],
+                prefix + "\\n" + content,
+                notification_type,
+                sender,
+            ))
+
+    return jsonify({
+        "message": f"{len(users)}人にメッセージを送信したよ。",
+        "sent_count": len(users),
+    })
 
 
 @app.route("/api/admin/overview")
@@ -965,6 +1191,29 @@ def respond_join_request():
                 INSERT OR IGNORE INTO memberships (room_id, username, role)
                 VALUES (?, ?, 'member')
             """, (room_id, applicant))
+
+            room = db.execute(
+                "SELECT name FROM rooms WHERE id = ?", (room_id,)
+            ).fetchone()
+
+            existing_members = db.execute("""
+                SELECT username FROM memberships
+                WHERE room_id = ? AND username != ?
+            """, (room_id, applicant)).fetchall()
+
+            room_name = room["name"] if room else "チャットルーム"
+
+            for member in existing_members:
+                db.execute("""
+                    INSERT INTO user_notifications
+                        (username, content, type, sender)
+                    VALUES (?, ?, 'notice', ?)
+                """, (
+                    member["username"],
+                    f"「{room_name}」に {applicant} さんが参加したよ。",
+                    current_user()
+                ))
+
             status = "approved"
         else:
             status = "rejected"
@@ -1125,15 +1374,28 @@ def notifications():
     if error:
         return error
 
+    username = current_user()
+
     with connect_db() as db:
+        cleanup_notifications(db)
+
         rows = db.execute("""
-            SELECT id, content, created_at
+            SELECT id, content, created_at, type, sender
             FROM user_notifications
             WHERE username = ? AND is_read = 0
             ORDER BY id DESC LIMIT 50
-        """, (current_user(),)).fetchall()
+        """, (username,)).fetchall()
 
-    return jsonify({"notifications": [dict(row) for row in rows]})
+        unread_count = db.execute("""
+            SELECT COUNT(*) AS total
+            FROM user_notifications
+            WHERE username = ? AND is_read = 0
+        """, (username,)).fetchone()["total"]
+
+    return jsonify({
+        "notifications": [dict(row) for row in rows],
+        "unread_count": unread_count
+    })
 
 
 @app.route("/api/notifications/read", methods=["POST"])
@@ -1142,11 +1404,17 @@ def read_notifications():
     if error:
         return error
 
+    username = current_user()
+
     with connect_db() as db:
         db.execute("""
-            UPDATE user_notifications SET is_read = 1
-            WHERE username = ?
-        """, (current_user(),))
+            UPDATE user_notifications
+            SET is_read = 1,
+                read_at = CURRENT_TIMESTAMP
+            WHERE username = ? AND is_read = 0
+        """, (username,))
+
+        cleanup_notifications(db)
 
     return jsonify({"message": "通知を確認したよ"})
 

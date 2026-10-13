@@ -91,6 +91,32 @@ h3{font-size:16px;margin:0 0 10px}
     <button id="refreshUsers" class="danger" type="button">ユーザー一覧を再読み込み</button>
   </section>
 
+  <section class="panel" id="adminNotifications">
+    <h2>📣 お知らせ・重要メッセージ・警告</h2>
+    <p class="muted">管理者からユーザーへメッセージを送信するよ。</p>
+
+    <form id="adminNotificationForm">
+      <label for="notificationRecipient">送信先</label>
+      <select id="notificationRecipient" required>
+        <option value="all">全ユーザー</option>
+      </select>
+
+      <label for="notificationType">メッセージの種類</label>
+      <select id="notificationType" required>
+        <option value="notice">通常のお知らせ（既読後7日で削除）</option>
+        <option value="important">重要なお知らせ（既読後14日で削除）</option>
+        <option value="warning">警告（既読後14日で削除）</option>
+      </select>
+
+      <label for="notificationContent">メッセージ</label>
+      <textarea id="notificationContent" maxlength="2000"
+        rows="5" required placeholder="送信する内容を入力してね"></textarea>
+
+      <button type="submit">メッセージを送信</button>
+    </form>
+    <p id="notificationSendStatus" role="status" aria-live="polite"></p>
+  </section>
+
   <section class="panel" id="rooms">
     <h2>💬 チャット全体の管理</h2>
     <div id="roomList" class="empty">部屋を読み込み中…</div>
@@ -231,6 +257,23 @@ async function loadUsers() {
             name.textContent = user.username + (user.suspended ? "（利用停止中）" : "");
             const detail = document.createElement("p");
             detail.textContent = user.approved ? "承認済みアカウント" : "未承認アカウント";
+
+            if (user.suspended) {
+                const suspensionInfo = document.createElement("p");
+                suspensionInfo.className = "muted";
+
+                if (user.suspension_permanent) {
+                    suspensionInfo.textContent = "停止期限：永久停止";
+                } else if (user.suspended_until) {
+                    suspensionInfo.textContent =
+                        "停止期限：" + user.suspended_until + " UTC";
+                } else {
+                    suspensionInfo.textContent =
+                        "停止期限：未設定（管理者による解除が必要）";
+                }
+
+                card.append(suspensionInfo);
+            }
             const actions = document.createElement("div");
             actions.className = "actions";
             if (user.is_bootstrap_admin) {
@@ -289,16 +332,50 @@ async function changeUserRole(username, action) {
 }
 
 async function changeUserStatus(username, action) {
-    const label = action === "suspend" ? "利用停止" : "利用再開";
-    if (!confirm(username + " さんを" + label + "する？")) return;
+    let duration = "permanent";
+
+    if (action === "suspend") {
+        const choice = prompt(
+            username + " さんの停止期間を入力してね。\n" +
+            "0 = 永久停止\n" +
+            "1 = 1日\n" +
+            "7 = 7日\n" +
+            "それ以外の1〜30 = 指定した日数"
+        );
+
+        if (choice === null) return;
+
+        if (choice.trim() === "0") {
+            duration = "permanent";
+        } else {
+            const days = Number(choice);
+
+            if (!Number.isInteger(days) || days < 1 || days > 30) {
+                statusText.textContent =
+                    "停止期間は0（永久）または1〜30日で指定してね。";
+                return;
+            }
+
+            duration = days;
+        }
+    }
+
+    const label = action === "suspend"
+        ? (duration === "permanent" ? "永久停止" : duration + "日間の利用停止")
+        : "利用再開";
+
+    if (!confirm(username + " さんを「" + label + "」にする？")) return;
+
     try {
         const response = await fetch("/api/admin/users/status", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({username, action})
+            body: JSON.stringify({username, action, duration})
         });
+
         const data = await response.json();
         statusText.textContent = data.message || data.error || "処理に失敗したよ";
+
         if (response.ok) {
             await loadUsers();
             await loadOverview();
@@ -410,6 +487,100 @@ document.getElementById("logout").addEventListener("click", async () => {
             "サーバーに接続できないよ。";
     }
 });
+
+
+async function loadNotificationRecipients() {
+    const select = document.getElementById("notificationRecipient");
+
+    try {
+        const response = await fetch("/api/admin/users");
+        const users = await response.json();
+
+        if (!response.ok) {
+            throw new Error(users.error || "ユーザー一覧を取得できなかったよ");
+        }
+
+        select.replaceChildren();
+
+        const allOption = document.createElement("option");
+        allOption.value = "all";
+        allOption.textContent = "全ユーザー";
+        select.append(allOption);
+
+        for (const user of users) {
+            if (!user.approved) continue;
+
+            const option = document.createElement("option");
+            option.value = user.username;
+            option.textContent = user.username;
+            select.append(option);
+        }
+    } catch (error) {
+        document.getElementById("notificationSendStatus").textContent =
+            error.message || "送信先を読み込めなかったよ";
+    }
+}
+
+document.getElementById("adminNotificationForm").addEventListener(
+    "submit",
+    async (event) => {
+        event.preventDefault();
+
+        const recipient = document.getElementById("notificationRecipient").value;
+        const type = document.getElementById("notificationType").value;
+        const content = document.getElementById("notificationContent").value.trim();
+        const status = document.getElementById("notificationSendStatus");
+
+        if (!content) {
+            status.textContent = "メッセージを入力してね。";
+            return;
+        }
+
+        const typeNames = {
+            notice: "通常のお知らせ",
+            important: "重要なお知らせ",
+            warning: "警告"
+        };
+
+        const destination = recipient === "all"
+            ? "全ユーザー"
+            : recipient + " さん";
+
+        if (!confirm(
+            destination + " に「" + typeNames[type] +
+            "」を送信する？\n\n" + content
+        )) return;
+
+        const button = event.currentTarget.querySelector(
+            'button[type="submit"]'
+        );
+        button.disabled = true;
+        status.textContent = "送信中…";
+
+        try {
+            const response = await fetch("/api/admin/notifications/send", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({recipient, type, content})
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || "送信に失敗したよ");
+            }
+
+            status.textContent = data.message || "送信したよ。";
+            document.getElementById("notificationContent").value = "";
+        } catch (error) {
+            status.textContent = error.message || "通信エラーが発生したよ。";
+        } finally {
+            button.disabled = false;
+        }
+    }
+);
+
+loadNotificationRecipients();
 
 loadRequests();
 loadOverview();

@@ -27,6 +27,13 @@ border:1px solid #34415e;border-radius:11px;color:#edf1ff;text-decoration:none}
 #notice{margin:12px 0;color:#a7f3d0}
 .notification{background:#263653;border:1px solid #8b79f6;padding:12px;margin:8px 0;border-radius:9px}
 .notification button{margin-left:10px;padding:6px 10px}
+.notification.admin_notice{border-color:#64748b}
+.notification.admin_important{border-color:#fbbf24;background:#3b321d}
+.notification.admin_warning{border-color:#fb7185;background:#3b202b}
+.notification-label{display:block;font-weight:bold;margin-bottom:6px}
+#novaOfflineNotificationBanner{display:none;padding:12px;margin:12px 0;
+border:1px solid #34d399;border-radius:9px;background:#12352f;color:#d1fae5}
+
 .danger{background:#39445c}
 
 #appModal[hidden]{display:none!important}
@@ -62,6 +69,8 @@ color:white;background:#34445f;cursor:pointer}
   <h1>部屋一覧</h1>
   <p class="muted" id="welcome">ログイン確認中...</p>
   <div id="notice" role="status"></div>
+  <div id="novaOfflineNotificationBanner" role="status" aria-live="polite"></div>
+  <button id="markNotificationsRead" type="button">通知をすべて既読にする</button>
   <section id="notifications" aria-live="polite"></section>
 
   <section class="panel">
@@ -170,30 +179,70 @@ async function loadNotifications() {
     const data = await api("/api/notifications");
     const items = data.notifications || [];
     const container = document.getElementById("notifications");
+    const banner = document.getElementById("novaOfflineNotificationBanner");
+
+    // 初回読み込み時だけ、オフライン中に届いた未読件数を表示
+    if (!window.__novaInitialNotificationBannerShown) {
+      window.__novaInitialNotificationBannerShown = true;
+      const count = Number(data.unread_count || 0);
+
+      if (count > 0) {
+        banner.textContent = "通知が" + count + "件届いています。";
+        banner.style.display = "block";
+        window.setTimeout(() => {
+          banner.style.display = "none";
+        }, 4000);
+      }
+    }
+
+    const shownIds = new Set(
+      Array.from(container.querySelectorAll("[data-notification-id]"))
+        .map(row => row.dataset.notificationId)
+    );
 
     for (const item of items) {
+      if (shownIds.has(String(item.id))) continue;
+
       const row = document.createElement("div");
       row.className = "notification";
+      row.dataset.notificationId = item.id;
+
+      const labels = {
+        admin_notice: "📣 管理者からのお知らせ",
+        admin_important: "⭐ 管理者からの重要なお知らせ",
+        admin_warning: "⚠️ 管理者からの警告"
+      };
+      const label = labels[item.type] || "🔔 通知";
+
+      const heading = document.createElement("span");
+      heading.className = "notification-label";
+      heading.textContent = label;
 
       const message = document.createElement("span");
-      message.textContent = "🔔 " + item.content;
+      message.textContent = item.content;
 
       const close = document.createElement("button");
       close.type = "button";
       close.textContent = "閉じる";
       close.addEventListener("click", () => row.remove());
 
-      row.append(message, close);
+      row.append(heading, message, close);
       container.prepend(row);
-    }
-
-    if (items.length) {
-      await api("/api/notifications/read", {method: "POST"});
     }
   } catch (error) {
     console.error("通知の読み込みに失敗:", error);
   }
 }
+
+document.getElementById("markNotificationsRead").addEventListener("click", async () => {
+  try {
+    await api("/api/notifications/read", {method: "POST"});
+    document.getElementById("notifications").replaceChildren();
+    document.getElementById("notice").textContent = "通知を既読にしたよ。";
+  } catch (error) {
+    console.error("通知を既読にできなかったよ:", error);
+  }
+});
 
 async function loadRooms() {
   const container = document.getElementById("rooms");
